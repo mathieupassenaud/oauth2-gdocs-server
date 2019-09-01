@@ -1,0 +1,118 @@
+var sheetID="";
+function doGet(request){
+  if(request.parameter.operation == "auth"){
+    var template = HtmlService.createTemplateFromFile("login");
+    template.client_id = request.parameter.client_id;
+    template.scope = request.parameter.scope;
+    template.redirect_uri = request.parameter.redirect_uri;
+    if(verifyClientIdRedirectURI(request.parameter.client_id, request.parameter.redirect_uri))
+      return template.evaluate();
+    else 
+      return HtmlService.createHtmlOutputFromFile("error");
+  }
+}
+
+function getScopeDataFromAuthorizationCode(authorize_code){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("sessions");
+  var data = sheet.getDataRange().getValues();
+  for(var i = 0; i<data.length;i++){
+    if(data[i][3] == authorize_code){
+      var scope = data[i][2];
+      var user = data[i][0];
+      return getUserInfo(user, scope);
+    }
+  }
+  return "";
+}
+
+function getUserInfo(user, scope){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("users");
+  var data = sheet.getDataRange().getValues();
+  for(var i = 0; i<data.length;i++){
+    if(data[i][0] == user){
+      for(var j = 0 ; j<data[0].length ; j++){
+        if(data[0][j] == scope)
+          return data[i][j];
+      }
+    }
+  }
+  return "";
+}
+
+function doPost(request){
+  if(request.parameter.operation == "token"){
+    if(verifyClientIdRedirectURI(request.parameter.client_id, request.parameter.redirect_uri))
+      return ContentService.createTextOutput(JSON.stringify({'access_token': createAccessToken(request.parameter.client_id, request.parameter.code) } ) ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function processForm(formObject) {
+  if(verifyLoginPassword(formObject.login, formObject.password))
+    return formObject.redirect_uri+"?code="+createSession(formObject.client_id, formObject.login, formObject.scope);
+  else
+    return "error";
+}
+
+function createAccessToken(client_id, code){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("sessions");
+  var data = sheet.getDataRange().getValues();
+  for(var i = 0; i<data.length;i++){
+    if(data[i][0] ==  client_id && data[i][2] == code){
+      var login = data[i][1];
+      var scopes = data[i][3].split(' ');
+      var data = {
+        "username": login
+      };
+      for(var scope in scopes)
+        data[scopes[scope]] = getUserInfo(login, scopes[scope]);
+      var authorize_code = computeAccessToken(data);
+      sheet.getRange(i+1, 5).setValue(authorize_code);
+      return authorize_code;
+    }
+  }
+  return "";
+}
+
+function computeAccessToken(data){ // https://www.jonathan-petitcolas.com/2014/11/27/creating-json-web-token-in-javascript.html
+  var header = {
+    "alg": "HS256",
+    "typ": "JWT"
+  };
+  var encodedHeader = Utilities.base64EncodeWebSafe(JSON.stringify(header));
+  var encodedData = Utilities.base64EncodeWebSafe(JSON.stringify(data));
+  var token = encodedHeader + "." + encodedData;
+  
+  var secret = "confidentialSecret";
+  var signature = Utilities.computeHmacSha256Signature(token, secret)
+  
+  signature =  Utilities.base64EncodeWebSafe(signature);
+  var signedToken = token + "." + signature;
+  return signedToken;
+}
+
+function createSession(client_id, login, scope){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("sessions");
+  var code = Utilities.getUuid();
+  sheet.appendRow([client_id, login, code, scope]);
+  return code;
+}
+
+function verifyLoginPassword(login, password){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("users");
+  var data = sheet.getDataRange().getValues();
+  for(var i = 0; i<data.length;i++){
+    if(data[i][0] == login && data[i][1] == password)
+      return true;
+  }
+  return false;
+}
+
+function verifyClientIdRedirectURI(client_id, redirect_uri){
+  var sheet = SpreadsheetApp.openById(sheetID).getSheetByName("clients");
+  var data = sheet.getDataRange().getValues();
+  for(var i = 0; i<data.length;i++){
+    if(data[i][0] == client_id && data[i][2] == redirect_uri)
+      return true;
+  }
+  return false;
+}
